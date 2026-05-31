@@ -1,3 +1,4 @@
+#main.tf
 ######################################################################
 # Acme Health — Patient Intake API (CGE-P Capstone Starter)
 #
@@ -16,14 +17,16 @@ terraform {
 }
 
 provider "aws" {
-  region = var.aws_region
+  region = "us-east-1"
 
   default_tags {
     tags = {
-      Project   = "acme-health-intake"
-      ManagedBy = "terraform"
-      Workload  = "patient-intake-api"
-      DataClass = "phi"
+      Project         = var.project_name
+      Environment     = var.environment
+      ManagedBy       = "terraform"
+      ComplianceScope = "HIPAASecurityRule"
+      Workload        = "patient-intake-api"
+      DataClass       = "1f0809"
     }
   }
 }
@@ -33,8 +36,10 @@ resource "random_id" "suffix" {
 }
 
 locals {
-  name_prefix = "acme-health-intake"
-  suffix      = random_id.suffix.hex
+  suffix      = var.suffix != "" ? var.suffix : random_id.suffix.hex
+  name_prefix = "${var.project_name}-${var.environment}"
+  log_name    = "${local.name_prefix}-logs-${local.suffix}"
+  key_id      = "${local.name_prefix}-key-${local.suffix}"
 }
 
 ######################################################################
@@ -95,6 +100,23 @@ resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
 }
+# HIPAA 164.312(a)(2)(iv) / SC-12 / SC-13 / SC-28: Cryptographic key establishment 
+# and protection at rest. Customed-owned keys, not AWS-managed keys. 
+# 90-day key rotation enabled.
+resource "aws_kms_key" "key" {
+  description             = "KMS key for acme-health resource encryption"
+  enable_key_rotation     = true
+  rotation_period_in_days = 90 # Equivalent to 7776000s
+
+  lifecycle {
+    prevent_destroy = true # set to "true" for use in production
+  }
+}
+# AWS "Aliases" allows for custom naming conventions
+resource "aws_kms_alias" "key" {
+  name      = "alias/${local.key_id}"
+  target_key_id = aws_kms_key.key.key_id
+}
 
 ######################################################################
 # DynamoDB — submissions table.
@@ -110,9 +132,13 @@ resource "aws_dynamodb_table" "intake" {
     name = "submission_id"
     type = "S"
   }
+  # HIPAA 164.312(a)(2)(iv): (Addressing GAP-02) server_side_encryption block is added, 
+  # defaulting to customer-owned key.
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.key.arn
+  }
 
-  # No server_side_encryption block. Defaults to AWS-owned key.
-  # GAP-02: capstone learner expected to add this with a customer-owned key.
 }
 
 ######################################################################
@@ -128,12 +154,144 @@ resource "aws_dynamodb_table" "intake" {
 # The "gaps" here are real residual gaps once those defaults are in place.
 ######################################################################
 
+data "aws_iam_policy_document" "require_secure_transport" {
+  statement {
+    sid    = "EnforceTLSRequestsOnly"
+    effect = "Deny"
+
+    # Apply to everyone
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    # Apply to all S3 actions
+    actions = ["s3:*"]
+
+    # Apply to the bucket and all objects within it
+    resources = [
+      aws_s3_bucket.uploads.arn,
+      "${bucket.uploads.arn}/*"
+
+
+    ]
+    # The core logic: Deny if SecureTransport is false
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
 resource "aws_s3_bucket" "uploads" {
   bucket = "${local.name_prefix}-uploads-${local.suffix}"
 }
 
+# SC-28: Protection of information at rest.
+# HIPAA 164.312(a)(2)(iv): (Addressing GAP-01) KMS keys are under customer custody 
+# and no longer defaults to AWS-managed keys.
+resource "aws_s3_bucket_server_side_encryption_configuration" "uploads" {
+  bucket = aws_s3_bucket.uploads.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.key.arn
+    }
+    bucket_key_enabled = true
+  }
+}
+# CM-6: Versioning preserves prior object states for recovery and audit.
+#HIPAA 164.312(e)(1): (Addressing GAP-04) Versioning enabled. PHI overwrites recoverable.
+resource "aws_s3_bucket_versioning" "uploads" {
+  bucket = aws_s3_bucket.uploads.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+data "aws_iam_policy_document" "require_secure_transport" {
+  statement {
+    sid    = "EnforceTLSRequestsOnly"
+    effect = "Deny"
+
+    # Apply to everyone
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    # Apply to all S3 actions
+    actions = ["s3:*"]
+
+    # Apply to the bucket and all objects within it
+    resources = [
+      aws_s3_bucket.my_bucket.arn,
+      "${aws_s3_bucket.my_bucket.arn}/*"
+    ]
+    # The core logic: Deny if SecureTransport is false
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+# 3. Attach the Policy to the Bucket
+resource "aws_s3_bucket_policy" "require_secure_transport_policy" {
+  bucket = aws_s3_bucket.my_bucket.id
+  policy = data.aws_iam_policy_document.require_secure_transport.json
+}
+
+# AC-3: Access control, explicit deny on every public access vector.
+resource "aws_s3_bucket_public_access_block" "uploads" {
+  bucket                  = aws_s3_bucket.uploads.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# AU-3 / AU-6: Content of audit records + audit review.
+resource "aws_s3_bucket" "log" {
+  bucket = local.log_name
+}
+
+resource "aws_s3_bucket_ownership_controls" "log" {
+  bucket = aws_s3_bucket.log.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+resource "aws_s3_bucket_acl" "log" {
+  depends_on = [aws_s3_bucket_ownership_controls.log]
+  bucket     = aws_s3_bucket.log.id
+  acl        = "log-delivery-write"
+}
+resource "aws_s3_bucket_server_side_encryption_configuration" "log" {
+  bucket = aws_s3_bucket.log.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.key.arn
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "log" {
+  bucket                  = aws_s3_bucket.log.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_logging" "uploads" {
+  bucket        = aws_s3_bucket.uploads.id
+  target_bucket = aws_s3_bucket.log.id
+  target_prefix = "access-logs/"
+}
 # (Intentionally omitted: SSE-KMS encryption with a customer CMK,
-#  bucket policy enforcing aws:SecureTransport, versioning, lifecycle.
+#  bucket policy enforcing aws:SecureTransport, lifecycle.
 #  These are the gaps the learner closes.)
 
 ######################################################################

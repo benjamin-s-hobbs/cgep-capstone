@@ -416,14 +416,21 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 # (Addressing GAP-07 by adding specific read/write permissions [instead of '*'], 
 # and creating a Rego policy that blocks admin actions [like deleting tables or 
 # changing bucket policies](***consulting AI model Gemini Pro 3.1***))
-resource "aws_iam_role_policy" "lambda_inline" {
+
+resource "aws_iam_role_policy" "lambda_intake" {  # Changed "lambda_inline" to "lambda_intake" 
+#assuming it was a typo and to preserve naming conventions
   name = "intake-data-access"
   role = aws_iam_role.lambda.id
 
+# HIPAA 164.312(e)(1)GAP-06: No reserved concurrency, no DLQ, no X-Ray. (Addressing GAP-06 by adding a 
+# set number of reserved_concurrent_executions '(5)', X-ray Tracing, and DLQ Permissions below. Also adding an SQS queue
+# to enable the Dead Letter Queue (DLQ). resources researched added with the help of AI system: "Gemini Pro 3.1")
+  
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      {
+      { # 1. DynamoDB Read/Write Permissions
+        
         Effect   = "Allow"
         Action   = [
           "dynamodb:PutItem",
@@ -438,6 +445,8 @@ resource "aws_iam_role_policy" "lambda_inline" {
         ]
         Resource = aws_dynamodb_table.intake.arn
       },
+      
+      # 2. S3 Read/Write Permissions
       {
         Effect   = "Allow"
         Action   = [
@@ -448,10 +457,45 @@ resource "aws_iam_role_policy" "lambda_inline" {
         ]
         Resource = ["${aws_s3_bucket.uploads.arn}", "${aws_s3_bucket.uploads.arn}/*"]
       },
+      
+      # 3. X-Ray Tracing Permissions
+      {
+        Effect   = "Allow"
+        Action   = [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords"
+        ]
+        Resource = "*" 
+      },
+            # 4. SQS DLQ Permissions
+      {
+        Effect   = "Allow"
+        Action   = "sqs:SendMessage"
+        Resource = aws_sqs_queue.lambda_dlq.arn
+      },
+      # KMS permissions for encrypting DLQ messages
+      {
+        Effect   = "Allow"
+        Action   = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt"
+        ]
+        Resource = aws_kms_key.key.arn
+      }
     ]
   })
 }
-
+# (resource added with the help of AI system: "Gemini Pro 3.1")
+resource "aws_sqs_queue" "lambda_dlq" {
+  name                      = "intake-handler-dlq"
+  # Retain failed messages for 14 days (the maximum)
+  message_retention_seconds = 1209600
+  # Use Customer-Managed Key (CMK) via the alias
+  kms_master_key_id         = aws_kms_alias.key.name
+  
+  # Best practice: caches the KMS key for 5 minutes to reduce KMS API calls and costs 
+  kms_data_key_reuse_period_seconds = 300 
+}
 resource "aws_lambda_function" "intake" {
   function_name    = "${local.name_prefix}-handler-${local.suffix}"
   role             = aws_iam_role.lambda.arn
@@ -460,14 +504,20 @@ resource "aws_lambda_function" "intake" {
   filename         = data.archive_file.handler.output_path
   source_code_hash = data.archive_file.handler.output_base64sha256
   timeout          = 10
-
+  reserved_concurrent_executions = 5
   environment {
     variables = {
       INTAKE_TABLE  = aws_dynamodb_table.intake.name
       UPLOAD_BUCKET = aws_s3_bucket.uploads.id
     }
   }
-  
+  tracing_config {
+    mode = "Active"
+  }
+
+  dead_letter_config {target_arn = aws_sqs_queue.lambda_dlq.arn}
+
+
   # HIPAA 164.312(e)(1)GAP-05: no vpc_config block. Learner expected to add one referencing (Addressing GAP-05 by adding both a 
   # vpc_config block and security group. Also added a resource block to enable the API to function in the private subnet of the VPC.  )
   
@@ -482,8 +532,6 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
   
-
-
 ######################################################################
 # API Gateway — HTTP API in front of the Lambda.
 # GAP-08: no access logging, no throttling, no WAF.

@@ -335,8 +335,9 @@ resource "aws_s3_bucket_policy" "vault" {
           "aws:PrincipalArn" = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
         }
       }
-      
-      {
+    },
+    { 
+    Statement = [{
         Sid       = "EnforceSecureTransport"
         Effect    = "Deny"
         Principal = "*"
@@ -350,10 +351,31 @@ resource "aws_s3_bucket_policy" "vault" {
             "aws:SecureTransport" = "false"
           }
         }
-      }
+      }]
     }]
   })
 }
+resource "aws_s3_bucket_policy" "vault" {
+  bucket = aws_s3_bucket.vault.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+        Sid       = "EnforceSecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource  = [
+          aws_s3_bucket.vault.arn,
+          "${aws_s3_bucket.vault.arn}/*"
+        ]
+        Condition = {
+          Bool    = {
+            "aws:SecureTransport" = "false"
+          }
+        }
+      }]
+    })
+  }
 
 # (Intentionally omitted: SSE-KMS encryption with a customer CMK,
 #  bucket policy enforcing aws:SecureTransport, lifecycle.
@@ -425,7 +447,7 @@ resource "aws_iam_role_policy" "lambda_inline" {
           "s3:ListBucket"
         ]
         Resource = ["${aws_s3_bucket.uploads.arn}", "${aws_s3_bucket.uploads.arn}/*"]
-      }
+      },
     ]
   })
 }
@@ -445,10 +467,22 @@ resource "aws_lambda_function" "intake" {
       UPLOAD_BUCKET = aws_s3_bucket.uploads.id
     }
   }
-
-  # GAP-05: no vpc_config block. Learner expected to add one referencing
-  # aws_subnet.private[*] and a hardened security group.
+  
+  # HIPAA 164.312(e)(1)GAP-05: no vpc_config block. Learner expected to add one referencing (Addressing GAP-05 by adding both a 
+  # vpc_config block and security group. Also added a resource block to enable the API to function in the private subnet of the VPC.  )
+  
+  vpc_config {
+    # It is highly recommended to use Private Subnets for Lambda (resource added with the help of AI system: "Gemini Pro 3.1")
+    subnet_ids         = aws_subnet.private.id
+    security_group_ids = aws_security_group.lambda_sg.id
+  }
 }
+resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
+  role       = aws_iam_role.lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+  
+
 
 ######################################################################
 # API Gateway — HTTP API in front of the Lambda.

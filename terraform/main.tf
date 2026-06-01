@@ -36,10 +36,13 @@ resource "random_id" "suffix" {
 }
 
 locals {
-  suffix      = var.suffix != "" ? var.suffix : random_id.suffix.hex
-  name_prefix = "${var.project_name}-${var.environment}"
-  log_name    = "${local.name_prefix}-logs-${local.suffix}"
-  key_id      = "${local.name_prefix}-key-${local.suffix}"
+  suffix          = var.suffix != "" ? var.suffix : random_id.suffix.hex
+  name_prefix     = "${var.project_name}-${var.environment}"
+  table_name      = "${local.name_prefix}-submissions-${local.suffix}"
+  uploads_bucket  = "${local.name_prefix}-uploads-${local.suffix}"
+  log_name        = "${local.name_prefix}-logs-${local.suffix}"
+  key_id          = "${local.name_prefix}-key-${local.suffix}"
+  vault_name      = "${local.name_prefix}-grc-evidence-vault-${local.suffix}"
 }
 
 ######################################################################
@@ -124,7 +127,7 @@ resource "aws_kms_alias" "key" {
 ######################################################################
 
 resource "aws_dynamodb_table" "intake" {
-  name         = "${local.name_prefix}-submissions-${local.suffix}"
+  name         = local.table_name.id
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "submission_id"
 
@@ -145,51 +148,43 @@ resource "aws_dynamodb_table" "intake" {
 # S3 — uploads bucket.
 # GAP-01: relies on AWS-managed SSE-S3 (default since 2023) instead of
 #         SSE-KMS with a customer CMK. PHI keys are not under customer
-#         custody.
+#         custody. (Addressed on Lns 107-110, 198-199)
 # GAP-03: no bucket policy denying non-TLS requests
-#         (aws:SecureTransport).
+#         (aws:SecureTransport). (Addressed on Ln 198-199)
 # GAP-04: no versioning. PHI overwrites are unrecoverable.
 #
 # Note: AWS now defaults new buckets to SSE-S3 + full public access block.
 # The "gaps" here are real residual gaps once those defaults are in place.
 ######################################################################
 
-data "aws_iam_policy_document" "require_secure_transport" {
-  statement {
-    sid    = "EnforceTLSRequestsOnly"
-    effect = "Deny"
-
-    # Apply to everyone
-    principals {
-      type        = "AWS"
-      identifiers = ["*"]
-    }
-
-    # Apply to all S3 actions
-    actions = ["s3:*"]
-
-    # Apply to the bucket and all objects within it
-    resources = [
-      aws_s3_bucket.uploads.arn,
-      "${bucket.uploads.arn}/*"
-
-
-    ]
-    # The core logic: Deny if SecureTransport is false
-    condition {
-      test     = "Bool"
-      variable = "aws:SecureTransport"
-      values   = ["false"]
-    }
-  }
-}
 resource "aws_s3_bucket" "uploads" {
-  bucket = "${local.name_prefix}-uploads-${local.suffix}"
+  bucket = aws_s3_bucket.uploads.id
 }
 
-# SC-28: Protection of information at rest.
+resource "aws_s3_bucket_policy" "uploads" {
+  bucket = aws_s3_bucket.uploads.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "EnforceSecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [ 
+        aws_s3_bucket.uploads.arn, 
+        "${aws_s3_bucket.uploads.arn}/*"
+      ]
+      Condition = {
+        StringNotEquals = {
+          "aws:PrincipalArn" = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+      }
+    }]
+  })
+}
+
 # HIPAA 164.312(a)(2)(iv): (Addressing GAP-01) KMS keys are under customer custody 
-# and no longer defaults to AWS-managed keys.
+# and no longer defaults to AWS-managed keys. 
 resource "aws_s3_bucket_server_side_encryption_configuration" "uploads" {
   bucket = aws_s3_bucket.uploads.id
   rule {
@@ -208,38 +203,7 @@ resource "aws_s3_bucket_versioning" "uploads" {
     status = "Enabled"
   }
 }
-data "aws_iam_policy_document" "require_secure_transport" {
-  statement {
-    sid    = "EnforceTLSRequestsOnly"
-    effect = "Deny"
 
-    # Apply to everyone
-    principals {
-      type        = "AWS"
-      identifiers = ["*"]
-    }
-
-    # Apply to all S3 actions
-    actions = ["s3:*"]
-
-    # Apply to the bucket and all objects within it
-    resources = [
-      aws_s3_bucket.my_bucket.arn,
-      "${aws_s3_bucket.my_bucket.arn}/*"
-    ]
-    # The core logic: Deny if SecureTransport is false
-    condition {
-      test     = "Bool"
-      variable = "aws:SecureTransport"
-      values   = ["false"]
-    }
-  }
-}
-# 3. Attach the Policy to the Bucket
-resource "aws_s3_bucket_policy" "require_secure_transport_policy" {
-  bucket = aws_s3_bucket.my_bucket.id
-  policy = data.aws_iam_policy_document.require_secure_transport.json
-}
 
 # AC-3: Access control, explicit deny on every public access vector.
 resource "aws_s3_bucket_public_access_block" "uploads" {
@@ -250,9 +214,32 @@ resource "aws_s3_bucket_public_access_block" "uploads" {
   restrict_public_buckets = true
 }
 
-# AU-3 / AU-6: Content of audit records + audit review.
+# AU-3 / AU-6: Content of audit records + audit review. Adding and configuring a
+# log bucket.
 resource "aws_s3_bucket" "log" {
-  bucket = local.log_name
+  bucket = aws_s3_bucket.log.id
+}
+
+resource "aws_s3_bucket_policy" "log" {
+  bucket = aws_s3_bucket.log.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "EnforceSecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [ 
+        aws_s3_bucket.log.arn,
+        "${aws_s3_bucket.log.arn}/*"
+      ]
+      Condition = {
+        StringNotEquals = {
+          "aws:PrincipalArn" = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+      }
+    }]
+  })
 }
 
 resource "aws_s3_bucket_ownership_controls" "log" {
@@ -290,6 +277,84 @@ resource "aws_s3_bucket_logging" "uploads" {
   target_bucket = aws_s3_bucket.log.id
   target_prefix = "access-logs/"
 }
+
+
+resource "aws_s3_bucket" "vault" {
+  bucket              = "${local.vault_name}"
+  object_lock_enabled = true        # MUST be set at bucket creation
+}
+
+resource "aws_s3_bucket_versioning" "vault" {
+  bucket = aws_s3_bucket.vault.id
+  versioning_configuration { status = "Enabled" }   # Object Lock requires versioning
+}
+
+resource "aws_s3_bucket_object_lock_configuration" "vault" {
+  bucket = aws_s3_bucket.vault.id
+
+  rule {
+    default_retention {
+      mode = var.lock_mode           # GOVERNANCE for labs, COMPLIANCE for production
+      days = var.retention_days
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.vault]
+}
+resource "aws_s3_bucket_server_side_encryption_configuration" "vault" {
+  bucket = aws_s3_bucket.vault.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "aws:kms" }
+  }
+}
+resource "aws_s3_bucket_public_access_block" "vault" {
+  bucket                  = aws_s3_bucket.vault.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Refuse bucket deletion from anyone except the account root.
+data "aws_caller_identity" "current" {}
+resource "aws_s3_bucket_policy" "vault" {
+  bucket = aws_s3_bucket.vault.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyBucketDeletion"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:DeleteBucket"
+      Resource  = [ 
+        aws_s3_bucket.vault.arn,
+        "${aws_s3_bucket.vault.arn}/*"
+      ]
+      Condition = {
+        StringNotEquals = {
+          "aws:PrincipalArn" = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+      }
+      
+      {
+        Sid       = "EnforceSecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource  = [
+          aws_s3_bucket.vault.arn,
+          "${aws_s3_bucket.vault.arn}/*"
+        ]
+        Condition = {
+          Bool    = {
+            "aws:SecureTransport" = "false"
+          }
+        }
+      }
+    }]
+  })
+}
+
 # (Intentionally omitted: SSE-KMS encryption with a customer CMK,
 #  bucket policy enforcing aws:SecureTransport, lifecycle.
 #  These are the gaps the learner closes.)
@@ -325,7 +390,10 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# GAP-07: deliberately broad permissions on the workload data stores.
+# GAP-07: deliberately broad permissions on the workload data stores. HIPAA 164.312(a)(1)
+# (Addressing GAP-07 by adding specific read/write permissions [instead of '*'], 
+# and creating a Rego policy that blocks admin actions [like deleting tables or 
+# changing bucket policies](***consulting AI model Gemini Pro 3.1***))
 resource "aws_iam_role_policy" "lambda_inline" {
   name = "intake-data-access"
   role = aws_iam_role.lambda.id
@@ -335,12 +403,27 @@ resource "aws_iam_role_policy" "lambda_inline" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = "dynamodb:*"
+        Action   = [
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:BatchWriteItem",
+          "dynamodb:GetItem",
+          "dynamodb:BatchGetItem",
+          "dynamodb:Scan",
+          "dynamodb:Query",
+          "dynamodb:DescribeTable"
+        ]
         Resource = aws_dynamodb_table.intake.arn
       },
       {
         Effect   = "Allow"
-        Action   = "s3:*"
+        Action   = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ]
         Resource = ["${aws_s3_bucket.uploads.arn}", "${aws_s3_bucket.uploads.arn}/*"]
       }
     ]

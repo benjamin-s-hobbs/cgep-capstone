@@ -537,6 +537,8 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
 # GAP-08: no access logging, no throttling, no WAF.
 ######################################################################
 
+# While understanding that the engineers have created a HTTP API, I am opting to switch to a REST API
+# as AWS HTTP APIs do not natively support AWF WAF. 
 resource "aws_apigatewayv2_api" "intake" {
   name          = "${local.name_prefix}-api-${local.suffix}"
   protocol_type = "HTTP"

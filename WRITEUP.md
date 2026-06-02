@@ -26,7 +26,9 @@ We have chosen to speak in the first person plural throughout this project write
 
  #### HIPAA 164.312(a)(2)(iv)
 
- #### HIPAA 164.312(b)
+ #### HIPAA 164.312(b) Switching to a REST API is the cleaner, more secure, and defensible architectural choice, especially when security and compliance are paramount.
+
+ We are choosing to present this change as a trade-off between architectural simplicity and security compliance.
 
  #### HIPAA 164.312(e)(1)
 
@@ -40,6 +42,7 @@ As there is not currently an official OSCAL (Open Security Controls Assessment L
 
 ## NEXT (Next couple of sprints)
 
+ 
 
 ## LATER 
 

@@ -518,13 +518,16 @@ resource "aws_lambda_function" "intake" {
   dead_letter_config {target_arn = aws_sqs_queue.lambda_dlq.arn}
 
 
-  # HIPAA 164.312(e)(1)GAP-05: no vpc_config block. Learner expected to add one referencing (Addressing GAP-05 by adding both a 
-  # vpc_config block and security group. Also added a resource block to enable the API to function in the private subnet of the VPC.  )
+  # HIPAA 164.312(e)(1)GAP-05: no vpc_config block. 
+  #Learner expected to add one referencing (Addressing GAP-05 by adding both a 
+  # vpc_config block and security group. Also added a resource block to enable 
+  # the API to function in the private subnet of the VPC.  )
   
   vpc_config {
-    # It is highly recommended to use Private Subnets for Lambda (resource added with the help of AI system: "Gemini Pro 3.1")
-    subnet_ids         = aws_subnet.private.id
-    security_group_ids = aws_security_group.lambda_sg.id
+    # Using the Private Subnet for Lambda 
+    # (resource added with the help of AI system: "Gemini Pro 3.1")
+    subnet_ids         = [aws_subnet.private.id]
+    security_group_ids = [aws_security_group.lambda_sg.id]
   }
 }
 resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
@@ -534,22 +537,63 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
   
 ######################################################################
 # API Gateway — HTTP API in front of the Lambda.
-# GAP-08: no access logging, no throttling, no WAF.
+# GAP-08: 1) no access logging, 2) no throttling, 3) no WAF.
 ######################################################################
+#
+# I undersatand that the engineers have created a HTTP API, and 
+# I am opting to switch to a REST API# as AWS HTTP API 
+# does not natively support AWF WAF. 
+#######################################################################
 
-# While understanding that the engineers have created a HTTP API, I am opting to switch to a REST API
-# as AWS HTTP APIs do not natively support AWF WAF. 
-resource "aws_apigatewayv2_api" "intake" {
-  name          = "${local.name_prefix}-api-${local.suffix}"
-  protocol_type = "HTTP"
+# 1. Creating a CloudWatch Log Group for API Gateway logs
+resource "aws_cloudwatch_log_group" "apigw_logs" {
+  name              = "/aws/apigateway/${local.name_prefix}-rest-api-${local.suffix}"
+  retention_in_days = 30
+  kms_key_id        = aws_kms_key.key.arn
+}
+# Switching to REST API for native WAF support (instead of needing to place the 
+# CloudFront distribution in front of the AWS HTTP API)
+resource "aws_api_gateway_rest_api" "intake" {
+  name          = "${local.name_prefix}-rest-api-${local.suffix}"
+  description   = "Intake REST API with native WAF integration"
 }
 
-resource "aws_apigatewayv2_integration" "lambda" {
-  api_id                 = aws_apigatewayv2_api.intake.id
-  integration_type       = "AWS_PROXY"
-  integration_uri        = aws_lambda_function.intake.invoke_arn
-  integration_method     = "POST"
-  payload_format_version = "2.0"
+resource "aws_api_gateway_resource" "intake" {
+  rest_api_id = aws_api_gateway_rest_api.intake.id
+  parent_id   = aws_api_gateway_rest_api.intake.root_resource_id
+  path_part   = "intake"
+}
+
+resource "aws_api_gateway_method" "intake_post" {
+  rest_api_id   = aws_api_gateway_rest_api.intake.id
+  resource_id   = aws_api_gateway_resource.intake.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+resource "aws_api_gateway_integration" "lambda" {
+  rest_api_id                 = aws_api_gateway_rest_api.intake.id
+  resource_id                 = aws_api_gateway_resource.intake.id
+  http_method                 = aws_api_gateway_method.intake_post.http_method
+  integration_http_method     = "POST"
+  type                        = "AWS_PROXY"
+  uri             = aws_lambda_function.intake.invoke_arn
+}
+
+# Deployment and Staging
+resource "aws_api_gateway_deployment" "intake" {
+  rest_api_id = aws_api_gateway_rest_api.intake.id
+
+# Triggers a redeployment when the API configuration changes
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_resource.intake.id,
+      aws_api_gateway_method.intake_post.id,
+      aws_api_gateway_integration.lambda.id,
+    ]))
+  }
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_apigatewayv2_route" "intake" {
@@ -558,17 +602,67 @@ resource "aws_apigatewayv2_route" "intake" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
-resource "aws_apigatewayv2_stage" "default" {
-  api_id      = aws_apigatewayv2_api.intake.id
-  name        = "$default"
-  auto_deploy = true
-  # GAP-08: no access_log_settings. Learner expected to wire CloudWatch logs.
+resource "aws_api_gateway_stage" "prod" {
+  deployment_id = aws_api_gateway_deployment.intake.id
+  rest_api_id   = aws_api_gateway_rest_api.intake.id
+  stage_name    = "prod"
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.apigw_logs.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      sourceIp       = "$context.identity.sourceIp"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      resourcePath   = "$context.resourcePath"
+      status         = "$context.status"
+      responseLength = "$context.responseLength"
+    })
+  }
 }
 
+# 2. Method Settings (Throttling enabled here)
+resource "aws_api_gateway_method_settings" "all" {
+  rest_api_id = aws_api_gateway_rest_api.intake.id
+  stage_name  = aws_api_gateway_stage.prod.stage_name
+  method_path = "*/*"
+
+  settings {
+    metrics_enabled        = true
+    data_trace_enabled     = true
+    throttling_burst_limit = 100
+    throttling_rate_limit  = 50
+  }
+}
+
+# 3. Native Regional WAF and Association
+resource "aws_wafv2_web_acl" "api_waf" {
+  name        = "${local.name_prefix}-rest-waf-${local.suffix}"
+  description = "Native WAF for REST API"
+  scope       = "REGIONAL" # Must be REGIONAL for API Gateway
+
+  default_action {
+    allow {}
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "rest-waf-metrics"
+    sampled_requests_enabled   = true
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "api_waf_assoc" {
+  resource_arn = aws_api_gateway_stage.prod.arn
+  web_acl_arn  = aws_wafv2_web_acl.api_waf.arn
+}
+
+# Lambda Permission (Updated for REST API)
 resource "aws_lambda_permission" "apigw" {
-  statement_id  = "AllowAPIGatewayInvoke"
+  statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.intake.function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.intake.execution_arn}/*/*"
+  source_arn    = "${aws_api_gateway_rest_api.intake.execution_arn}/*/*"
 }
+

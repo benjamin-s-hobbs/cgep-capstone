@@ -127,7 +127,7 @@ resource "aws_kms_alias" "key" {
 ######################################################################
 
 resource "aws_dynamodb_table" "intake" {
-  name         = local.table_name.id
+  name         = local.table_name
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "submission_id"
 
@@ -555,7 +555,7 @@ resource "aws_api_gateway_integration" "lambda" {
   http_method                 = aws_api_gateway_method.intake_post.http_method
   integration_http_method     = "POST"
   type                        = "AWS_PROXY"
-  uri             = aws_lambda_function.intake.invoke_arn
+  uri                         = aws_lambda_function.intake.invoke_arn
 }
 
 # Deployment and Staging
@@ -575,11 +575,7 @@ resource "aws_api_gateway_deployment" "intake" {
   }
 }
 
-resource "aws_apigatewayv2_route" "intake" {
-  api_id    = aws_apigatewayv2_api.intake.id
-  route_key = "POST /intake"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
-}
+
 
 resource "aws_api_gateway_stage" "prod" {
   deployment_id = aws_api_gateway_deployment.intake.id

@@ -69,7 +69,7 @@ resource "aws_subnet" "public" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
 
-  tags = { Name = "${local.name_prefix}-public-${count.index}" }
+  tags                    = { Name = "${local.name_prefix}-public-${count.index}" }
 }
 
 resource "aws_subnet" "private" {
@@ -81,6 +81,26 @@ resource "aws_subnet" "private" {
   tags = { Name = "${local.name_prefix}-private-${count.index}" }
 }
 
+resource "aws_security_group" "lambda_sg" {
+  name        = "intake-lambda-sg"
+  description = "Security group for Patient Intake API Lambda function"
+  
+  vpc_id      = aws_vpc.main.id 
+
+  # Ingress: Deliberately left empty. 
+  # The Lambda does not need to accept inbound network connections to be invoked.
+  # Egress: Controls what the Lambda can reach out to.
+  egress {
+    description = "Allow outbound HTTPS traffic for AWS API interactions"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = "10.42.${count.index + 10}.0/24" 
+  }
+    tags = {
+    Name = "intake-lambda-sg"
+  }
+}
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
@@ -505,7 +525,7 @@ resource "aws_lambda_function" "intake" {
   vpc_config {
     # Using the Private Subnet for Lambda 
     # (resource added with the help of AI system: "Gemini Pro 3.1")
-    subnet_ids         = [aws_subnet.private[*].id]
+    subnet_ids         = aws_subnet.private[*].id
     security_group_ids = [aws_security_group.lambda_sg.id]
   }
 }

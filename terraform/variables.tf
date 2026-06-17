@@ -40,5 +40,5 @@ variable "lock_mode" {
 variable "retention_days" {
   type        = number
   description = "Default retention applied to every uploaded object."
-  default     = 1
+  default     = 30
 }

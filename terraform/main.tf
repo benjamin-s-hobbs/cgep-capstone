@@ -505,7 +505,7 @@ resource "aws_lambda_function" "intake" {
   vpc_config {
     # Using the Private Subnet for Lambda 
     # (resource added with the help of AI system: "Gemini Pro 3.1")
-    subnet_ids         = [aws_subnet.private.id]
+    subnet_ids         = aws_subnet.private[*].id
     security_group_ids = [aws_security_group.lambda_sg.id]
   }
 }

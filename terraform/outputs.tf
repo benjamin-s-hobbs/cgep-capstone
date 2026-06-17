@@ -1,6 +1,6 @@
 # outputs.tf
 output "api_url" {
-  value       = "${aws_apigatewayv2_api.intake.api_endpoint}/intake"
+  value       = "${aws_api_gateway_rest_api.intake.id}"
   description = "POST /intake endpoint."
 }
 

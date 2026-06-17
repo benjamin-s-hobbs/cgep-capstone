@@ -545,10 +545,68 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
 #######################################################################
 
 # 1. Creating a CloudWatch Log Group for API Gateway logs
+# 1a. Create a key to encrypt just the logs, and make sure aws (CloudWatch) can use it
+
+resource "aws_kms_key" "cloudwatch_log_key" {
+  description             = "Dedicated KMS CMK key for CloudWatch API Gateway Logs"
+  enable_key_rotation     = true
+  rotation_period_in_days = 90
+
+  lifecycle {
+    prevent_destroy = true # Good practice for compliance workloads
+  }
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # 1. Mandatory Root Access (so you don't lock yourself out of the key)
+        Sid       = "Enable IAM User Permissions"
+        Effect    = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        # 2. Grant CloudWatch Logs permission to use the key
+        Sid       = "Allow CloudWatch Logs"
+        Effect    = "Allow"
+        Principal = {
+          Service = "logs.${data.aws_region.current.name}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt*",
+          "kms:Decrypt*",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:Describe*"
+        ]
+        Resource = "*"
+        Condition = {
+          # Security Best Practice: Prevent the "Confused Deputy" problem 
+          # by ensuring this key can only encrypt logs from YOUR account.
+          ArnLike = {
+            "kms:EncryptionContext:aws:logs:arn": "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+          }
+        }
+      }
+    ]
+  })
+}
+
+# 1b. Create an alias for the key so that it can be referenced by name
+resource "aws_kms_alias" "cloudwatch_log_key" {
+  name          = "alias/${local.name_prefix}-cw-logs-key-${local.suffix}"
+  target_key_id = aws_kms_key.cloudwatch_log_key.key_id
+}
+
+# 1c. Create a CloudWatch Log Group for API Gateway logs, and pass your new key to it.
 resource "aws_cloudwatch_log_group" "apigw_logs" {
   name              = "/aws/apigateway/${local.name_prefix}-rest-api-${local.suffix}"
   retention_in_days = 30
-  kms_key_id        = aws_kms_key.key.arn
+  kms_key_id        = aws_kms_key.cloudwatch_log_key.arn
 }
 # Switching to REST API for native WAF support (instead of needing to place the 
 # CloudFront distribution in front of the AWS HTTP API)

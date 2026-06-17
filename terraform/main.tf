@@ -355,27 +355,6 @@ resource "aws_s3_bucket_policy" "vault" {
     }]
   })
 }
-resource "aws_s3_bucket_policy" "vault" {
-  bucket = aws_s3_bucket.vault.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-        Sid       = "EnforceSecureTransport"
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "s3:*"
-        Resource  = [
-          aws_s3_bucket.vault.arn,
-          "${aws_s3_bucket.vault.arn}/*"
-        ]
-        Condition = {
-          Bool    = {
-            "aws:SecureTransport" = "false"
-          }
-        }
-      }]
-    })
-  }
 
 # (Intentionally omitted: SSE-KMS encryption with a customer CMK,
 #  bucket policy enforcing aws:SecureTransport, lifecycle.
@@ -526,7 +505,7 @@ resource "aws_lambda_function" "intake" {
   vpc_config {
     # Using the Private Subnet for Lambda 
     # (resource added with the help of AI system: "Gemini Pro 3.1")
-    subnet_ids         = [aws_subnet.private.id]
+    subnet_ids         = [aws_subnet.private[*].id]
     security_group_ids = [aws_security_group.lambda_sg.id]
   }
 }
@@ -576,7 +555,7 @@ resource "aws_api_gateway_integration" "lambda" {
   http_method                 = aws_api_gateway_method.intake_post.http_method
   integration_http_method     = "POST"
   type                        = "AWS_PROXY"
-  uri             = aws_lambda_function.intake.invoke_arn
+  uri                         = aws_lambda_function.intake.invoke_arn
 }
 
 # Deployment and Staging
@@ -594,12 +573,6 @@ resource "aws_api_gateway_deployment" "intake" {
   lifecycle {
     create_before_destroy = true
   }
-}
-
-resource "aws_apigatewayv2_route" "intake" {
-  api_id    = aws_apigatewayv2_api.intake.id
-  route_key = "POST /intake"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
 resource "aws_api_gateway_stage" "prod" {

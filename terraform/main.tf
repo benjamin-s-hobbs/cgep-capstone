@@ -355,27 +355,6 @@ resource "aws_s3_bucket_policy" "vault" {
     }]
   })
 }
-resource "aws_s3_bucket_policy" "vault" {
-  bucket = aws_s3_bucket.vault.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-        Sid       = "EnforceSecureTransport"
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "s3:*"
-        Resource  = [
-          aws_s3_bucket.vault.arn,
-          "${aws_s3_bucket.vault.arn}/*"
-        ]
-        Condition = {
-          Bool    = {
-            "aws:SecureTransport" = "false"
-          }
-        }
-      }]
-    })
-  }
 
 # (Intentionally omitted: SSE-KMS encryption with a customer CMK,
 #  bucket policy enforcing aws:SecureTransport, lifecycle.

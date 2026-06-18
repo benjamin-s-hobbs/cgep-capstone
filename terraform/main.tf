@@ -131,10 +131,10 @@ resource "aws_kms_key" "acme_key" {
   enable_key_rotation     = true
   rotation_period_in_days = 90 # Equivalent to 7776000s
 
-  lifecycle {
-    prevent_destroy = true # set to "true" for use in production
-  }
-}
+#   lifecycle {
+#     prevent_destroy = true # set to "true" for use in production
+#   }
+# }
 # AWS "Aliases" allows for custom naming conventions
 resource "aws_kms_alias" "key" {
   name      = "alias/${local.key_id}"
@@ -550,9 +550,9 @@ resource "aws_kms_key" "cloudwatchlog_key" {
   enable_key_rotation     = true
   rotation_period_in_days = 90
 
-  lifecycle {
-    prevent_destroy = true # Good practice for compliance workloads
-  }
+  # lifecycle {
+  #   prevent_destroy = true # Good practice for compliance workloads
+  # }
 
   policy = jsonencode({
     Version = "2012-10-17"

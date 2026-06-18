@@ -37,13 +37,13 @@ output "encryption_algorithm" {
   ])
 }
 
-output "cmek_main_key_arn" {
-  value = aws_kms_key.key.arn
+output "cmek_acme_key_arn" {
+  value = aws_kms_key.acme_key.arn
   description = "Customer-managed KMS key ARN for most encryption operations."
 }
 
-output "cmek_cloudwatch_log_key_arn" {
-  value = aws_kms_key.cloudwatch_log_key.arn
+output "cmek_cloudwatchlog_key_arn" {
+  value = aws_kms_key.cloudwatchlog_key.arn
   description = "Customer-managed KMS key ARN for CloudWatch log encryption."
 }
 

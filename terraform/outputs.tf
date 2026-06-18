@@ -38,7 +38,7 @@ output "encryption_algorithm" {
 }
 
 output "aws_kms_key_arn" {
-  value = aws_kms_key.key_id
+  value = aws_kms_key.key.arn
   description = "Customer-managed KMS key ARN for most encryption operations."
 }
 

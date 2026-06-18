@@ -605,7 +605,7 @@ resource "aws_kms_alias" "cloudwatch_log_key" {
 resource "aws_cloudwatch_log_group" "apigw_logs" {
   name              = "/aws/apigateway/${local.name_prefix}-rest-api-${local.suffix}"
   retention_in_days = 30
-  kms_key_id        = aws_kms_key.cloudwatchlog_key.arn
+  kms_key_id        = aws_kms_key.cloudwatch_log_key.arn
 }
 # Switching to REST API for native WAF support (instead of needing to place the 
 # CloudFront distribution in front of the AWS HTTP API)

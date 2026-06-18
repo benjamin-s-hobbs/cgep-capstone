@@ -195,8 +195,8 @@ resource "aws_s3_bucket_policy" "uploads" {
         "${aws_s3_bucket.uploads.arn}/*"
       ]
       Condition = {
-        StringNotEquals = {
-          "aws:PrincipalArn" = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        Bool = {
+          "aws:SecureTransport" = "false" # Blocks any request not using HTTPS
         }
       }
     }]
@@ -254,8 +254,8 @@ resource "aws_s3_bucket_policy" "log" {
         "${aws_s3_bucket.log.arn}/*"
       ]
       Condition = {
-        StringNotEquals = {
-          "aws:PrincipalArn" = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        Bool = {
+          "aws:SecureTransport" = "false" # Blocks any request not using HTTPS
         }
       }
     }]
@@ -357,7 +357,6 @@ resource "aws_s3_bucket_policy" "vault" {
       }
     },
     { 
-    Statement = [{
         Sid       = "EnforceSecureTransport"
         Effect    = "Deny"
         Principal = "*"
@@ -372,9 +371,9 @@ resource "aws_s3_bucket_policy" "vault" {
           }
         }
       }]
-    }]
-  })
+    })
 }
+
 
 # (Intentionally omitted: SSE-KMS encryption with a customer CMK,
 #  bucket policy enforcing aws:SecureTransport, lifecycle.
@@ -503,7 +502,6 @@ resource "aws_lambda_function" "intake" {
   filename         = data.archive_file.handler.output_path
   source_code_hash = data.archive_file.handler.output_base64sha256
   timeout          = 10
-  reserved_concurrent_executions = 5
   environment {
     variables = {
       INTAKE_TABLE  = aws_dynamodb_table.intake.name

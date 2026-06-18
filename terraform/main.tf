@@ -686,6 +686,9 @@ resource "aws_api_gateway_stage" "prod" {
   rest_api_id   = aws_api_gateway_rest_api.intake.id
   stage_name    = "prod"
 
+# Adding this line so Terraform waits for the account setting to finish
+# before the stage is created
+  depends_on = [aws_api_gateway_account.main]
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.apigw_logs.arn
     format = jsonencode({

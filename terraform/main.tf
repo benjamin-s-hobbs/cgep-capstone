@@ -126,7 +126,7 @@ resource "aws_route_table_association" "public" {
 # HIPAA 164.312(a)(2)(iv) / SC-12 / SC-13 / SC-28: Cryptographic key establishment 
 # and protection at rest. Customed-owned keys, not AWS-managed keys. 
 # 90-day key rotation enabled.
-resource "aws_kms_key" "acme_key" {
+resource "aws_kms_key" "key" {
   description             = "KMS key for acme-health resource encryption"
   enable_key_rotation     = true
   rotation_period_in_days = 90 # Equivalent to 7776000s
@@ -135,10 +135,11 @@ resource "aws_kms_key" "acme_key" {
 #     prevent_destroy = true # set to "true" for use in production
 #   }
 # }
+}
 # AWS "Aliases" allows for custom naming conventions
 resource "aws_kms_alias" "key" {
   name      = "alias/${local.key_id}"
-  target_key_id = aws_kms_key.acme_key.key_id
+  target_key_id = aws_kms_key.key.key_id
 }
 
 ######################################################################
@@ -545,7 +546,7 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
 # 1. Creating a CloudWatch Log Group for API Gateway logs
 # 1a. Create a key to encrypt just the logs, and make sure aws (CloudWatch) can use it
 
-resource "aws_kms_key" "cloudwatchlog_key" {
+resource "aws_kms_key" "cloudwatch_log_key" {
   description             = "Dedicated KMS CMK key for CloudWatch API Gateway Logs"
   enable_key_rotation     = true
   rotation_period_in_days = 90
@@ -595,9 +596,9 @@ resource "aws_kms_key" "cloudwatchlog_key" {
 }
 
 # 1b. Create an alias for the key so that it can be referenced by name
-resource "aws_kms_alias" "cloudwatchlog_key" {
+resource "aws_kms_alias" "cloudwatch_log_key" {
   name          = "alias/${local.name_prefix}-cw-logs-key-${local.suffix}"
-  target_key_id = aws_kms_key.cloudwatchlog_key.key_id
+  target_key_id = aws_kms_key.cloudwatch_log_key.key_id
 }
 
 # 1c. Create a CloudWatch Log Group for API Gateway logs, and pass your new key to it.

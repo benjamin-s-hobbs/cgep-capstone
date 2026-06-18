@@ -135,7 +135,7 @@ resource "aws_kms_key" "key" {
 #    prevent_destroy = true # set to "true" for use in production
 #  }
 #}
-
+}
 # AWS "Aliases" allows for custom naming conventions
 resource "aws_kms_alias" "key" {
   name      = "alias/${local.key_id}"

@@ -574,7 +574,7 @@ resource "aws_kms_key" "cloudwatch_log_key" {
         Sid       = "Allow CloudWatch Logs"
         Effect    = "Allow"
         Principal = {
-          Service = "logs.${data.aws_region.current.name}.amazonaws.com"
+          Service = "logs.${var.aws_region}.amazonaws.com"
         }
         Action = [
           "kms:Encrypt*",
@@ -588,7 +588,7 @@ resource "aws_kms_key" "cloudwatch_log_key" {
           # Security Best Practice: Prevent the "Confused Deputy" problem 
           # by ensuring this key can only encrypt logs from YOUR account.
           ArnLike = {
-            "kms:EncryptionContext:aws:logs:arn": "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+            "kms:EncryptionContext:aws:logs:arn": "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
           }
         }
       }

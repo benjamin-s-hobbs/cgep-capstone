@@ -131,11 +131,11 @@ resource "aws_kms_key" "key" {
   enable_key_rotation     = true
   rotation_period_in_days = 90 # Equivalent to 7776000s
 
-#   lifecycle {
-#     prevent_destroy = true # set to "true" for use in production
-#   }
-# }
-}
+#  lifecycle {
+#    prevent_destroy = true # set to "true" for use in production
+#  }
+#}
+
 # AWS "Aliases" allows for custom naming conventions
 resource "aws_kms_alias" "key" {
   name      = "alias/${local.key_id}"
@@ -551,9 +551,9 @@ resource "aws_kms_key" "cloudwatch_log_key" {
   enable_key_rotation     = true
   rotation_period_in_days = 90
 
-  # lifecycle {
-  #   prevent_destroy = true # Good practice for compliance workloads
-  # }
+#  lifecycle {
+#    prevent_destroy = true # Good practice for compliance workloads
+#}
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -607,8 +607,37 @@ resource "aws_cloudwatch_log_group" "apigw_logs" {
   retention_in_days = 30
   kms_key_id        = aws_kms_key.cloudwatch_log_key.arn
 }
+
+
+# IAM Role to allow API Gateway to push logs to CloudWatch
+resource "aws_iam_role" "apigw_cloudwatch" {
+  name = "${local.name_prefix}-apigw-cw-role-${local.suffix}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "apigateway.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+# Attached the AWS-managed policy for API Gateway logging
+resource "aws_iam_role_policy_attachment" "apigw_cloudwatch" {
+  role       = aws_iam_role.apigw_cloudwatch.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
+# Apply the role to the API Gateway Account settings
+resource "aws_api_gateway_account" "main" {
+  cloudwatch_role_arn = aws_iam_role.apigw_cloudwatch.arn
+}
+
+
 # Switching to REST API for native WAF support (instead of needing to place the 
 # CloudFront distribution in front of the AWS HTTP API)
+
 resource "aws_api_gateway_rest_api" "intake" {
   name          = "${local.name_prefix}-rest-api-${local.suffix}"
   description   = "Intake REST API with native WAF integration"

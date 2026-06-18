@@ -110,9 +110,7 @@ resource "aws_security_group" "lambda_sg" {
   
   vpc_id      = aws_vpc.main.id 
 
-  # Ingress: Deliberately left empty. 
-  # The Lambda does not need to accept inbound network connections to be invoked.
-  # Egress: Controls what the Lambda can reach out to.
+  # Original Egress: Controls what the Lambda can reach out to over HTTPS.
   egress {
     description = "Allow outbound HTTPS traffic for AWS API interactions"
     from_port   = 443
@@ -120,7 +118,26 @@ resource "aws_security_group" "lambda_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"] 
   }
-    tags = {
+
+  # NEW Egress: Allows the Lambda to ask the VPC DNS server for IP addresses.
+  # We restrict this strictly to the VPC's internal CIDR block for tight security!
+  egress {
+    description = "Allow outbound DNS resolution (UDP)"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = [aws_vpc.main.cidr_block] 
+  }
+
+  egress {
+    description = "Allow outbound DNS resolution (TCP)"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.main.cidr_block] 
+  }
+
+  tags = {
     Name = "intake-lambda-sg"
   }
 }

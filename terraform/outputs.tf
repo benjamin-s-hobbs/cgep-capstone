@@ -1,5 +1,5 @@
 # outputs.tf
-output "apigw_endpoint_url" {
+output "api_url" {
   value       = "${aws_api_gateway_stage.prod.invoke_url}/intake"
   description = "POST /intake endpoint."
 }
